@@ -1,0 +1,8 @@
+---
+# roles/rollback/vars/main.yml
+
+patch_rollback_facts:
+  transaction_id: ""
+  result: "not_run"
+  timestamp: ""
+  output: ""

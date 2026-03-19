@@ -1,0 +1,24 @@
+# inventory/hosts
+# Sample inventory — adjust to your environment
+
+[rhel9]
+server01.example.com
+server02.example.com
+server03.example.com
+
+[rhel9_critical]
+db01.example.com
+db02.example.com
+
+[rhel9_non_critical]
+web01.example.com
+web02.example.com
+
+# Group children for targeting subsets
+[production:children]
+rhel9_critical
+rhel9_non_critical
+
+[all:vars]
+ansible_user=ansible
+ansible_become=true

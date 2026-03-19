@@ -1,0 +1,56 @@
+---
+# playbooks/patch.yml
+# Main entry point for RHEL 9 patching
+#
+# Usage:
+#   ansible-playbook playbooks/patch.yml -i inventory/hosts
+#   ansible-playbook playbooks/patch.yml -i inventory/hosts --check
+#   ansible-playbook playbooks/patch.yml -i inventory/hosts -e "patch_security_only=true"
+#   ansible-playbook playbooks/patch.yml -i inventory/hosts -e "patch_reboot_policy=never"
+
+- name: RHEL 9 Patching
+  hosts: "{{ patch_target | default('all') }}"
+  gather_facts: true
+  serial: "{{ patch_serial | default('20%') }}"  # patch 20% of hosts at a time by default
+  any_errors_fatal: false
+
+  pre_tasks:
+    - name: Verify target OS is RHEL 9
+      ansible.builtin.assert:
+        that:
+          - ansible_distribution == "RedHat"
+          - ansible_distribution_major_version == "9"
+        fail_msg: "This playbook targets RHEL 9 only. Found: {{ ansible_distribution }} {{ ansible_distribution_version }}"
+        success_msg: "OS check passed: {{ ansible_distribution }} {{ ansible_distribution_version }}"
+
+    - name: Record patch start time
+      ansible.builtin.set_fact:
+        patch_start_time: "{{ ansible_date_time.iso8601 }}"
+        patch_hostname: "{{ inventory_hostname }}"
+
+  roles:
+    - role: patch_validation
+      tags: [validation, pre_patch]
+      vars:
+        patch_validation_phase: pre
+
+    - role: rhel_patch
+      tags: [patch]
+
+    - role: patch_validation
+      tags: [validation, post_patch]
+      vars:
+        patch_validation_phase: post
+
+    - role: patch_report
+      tags: [report]
+      when: not ansible_check_mode
+
+  post_tasks:
+    - name: Trigger rollback if post-checks failed and auto-rollback is enabled
+      ansible.builtin.include_role:
+        name: rollback
+      when:
+        - patch_rollback_on_failure | bool
+        - patch_post_check_failed | default(false) | bool
+      tags: [rollback]

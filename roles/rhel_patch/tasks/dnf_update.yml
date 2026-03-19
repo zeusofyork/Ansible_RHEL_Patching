@@ -1,0 +1,51 @@
+---
+# roles/rhel_patch/tasks/dnf_update.yml
+
+- name: Check for available updates (dry run)
+  ansible.builtin.command: >
+    dnf check-update
+    {% if patch_security_only | bool %}--security{% endif %}
+    {% for pkg in patch_exclude_packages %}--exclude={{ pkg }}{% endfor %}
+  register: dnf_check_update
+  changed_when: false
+  failed_when: dnf_check_update.rc not in [0, 100]  # 100 = updates available
+
+- name: Set fact — updates available
+  ansible.builtin.set_fact:
+    patch_updates_available: "{{ dnf_check_update.rc == 100 }}"
+
+- name: Log available update count
+  ansible.builtin.debug:
+    msg: >
+      {{ 'Updates available — proceeding with patch' if patch_updates_available
+         else 'No updates available — nothing to do' }}
+
+- name: Apply all package updates
+  ansible.builtin.dnf:
+    name: "*"
+    state: latest
+    security: "{{ patch_security_only | bool }}"
+    exclude: "{{ patch_exclude_packages }}"
+    update_cache: false
+  register: dnf_update_result
+  when:
+    - patch_updates_available | bool
+    - patch_update_all | bool
+
+- name: Apply specific packages
+  ansible.builtin.dnf:
+    name: "{{ patch_packages }}"
+    state: latest
+    security: "{{ patch_security_only | bool }}"
+    update_cache: false
+  register: dnf_specific_update
+  when:
+    - not patch_update_all | bool
+    - patch_packages | length > 0
+
+- name: Store DNF update result
+  ansible.builtin.set_fact:
+    patch_dnf_result:
+      changed: "{{ dnf_update_result.changed | default(false) }}"
+      packages: "{{ dnf_update_result.results | default([]) }}"
+      msg: "{{ dnf_update_result.msg | default('No updates applied') }}"

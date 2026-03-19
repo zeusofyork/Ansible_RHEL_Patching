@@ -1,0 +1,100 @@
+---
+# roles/patch_validation/tasks/pre_checks.yml
+
+- name: "[PRE] Gather disk usage facts"
+  ansible.builtin.shell: df -BM / | awk 'NR==2 {gsub(/M/,"",$4); print $4}'
+  register: root_free_mb
+  changed_when: false
+
+- name: "[PRE] Assert sufficient disk space on /"
+  ansible.builtin.assert:
+    that:
+      - root_free_mb.stdout | int >= patch_check_disk_min_free_mb | int
+    fail_msg: >
+      Insufficient disk space: {{ root_free_mb.stdout }}MB free,
+      {{ patch_check_disk_min_free_mb }}MB required.
+    success_msg: "Disk check passed: {{ root_free_mb.stdout }}MB free"
+  when: patch_pre_checks_fail_fast | bool
+
+- name: "[PRE] Check system load average"
+  ansible.builtin.shell: cat /proc/loadavg | awk '{print $1}'
+  register: load_avg
+  changed_when: false
+
+- name: "[PRE] Assert load average is acceptable"
+  ansible.builtin.assert:
+    that:
+      - load_avg.stdout | float <= patch_check_load_max | float
+    fail_msg: >
+      System load too high: {{ load_avg.stdout }}
+      (max allowed: {{ patch_check_load_max }})
+    success_msg: "Load check passed: {{ load_avg.stdout }}"
+  when: patch_pre_checks_fail_fast | bool
+
+- name: "[PRE] Check subscription status"
+  ansible.builtin.command: subscription-manager status
+  register: subman_status
+  changed_when: false
+  failed_when: false
+  when: patch_subscription_manager | bool
+
+- name: "[PRE] Assert system is subscribed"
+  ansible.builtin.assert:
+    that:
+      - "'Overall Status: Current' in subman_status.stdout or
+         'Overall Status: Disabled' in subman_status.stdout"
+    fail_msg: "System is not properly subscribed: {{ subman_status.stdout }}"
+    success_msg: "Subscription check passed"
+  when:
+    - patch_subscription_manager | bool
+    - patch_pre_checks_fail_fast | bool
+
+- name: "[PRE] Verify required repos are enabled"
+  ansible.builtin.command: subscription-manager repos --list-enabled
+  register: enabled_repos
+  changed_when: false
+  when: patch_subscription_manager | bool and patch_subman_verify_repos | bool
+
+- name: "[PRE] Assert required repos are enabled"
+  ansible.builtin.assert:
+    that:
+      - item in enabled_repos.stdout
+    fail_msg: "Required repo not enabled: {{ item }}"
+    success_msg: "Repo check passed: {{ item }}"
+  loop: "{{ patch_required_repos }}"
+  when:
+    - patch_subscription_manager | bool
+    - patch_subman_verify_repos | bool
+    - patch_pre_checks_fail_fast | bool
+
+- name: "[PRE] Capture list of packages before patching"
+  ansible.builtin.shell: rpm -qa --queryformat '%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}\n' | sort
+  register: pre_patch_packages
+  changed_when: false
+
+- name: "[PRE] Capture running kernel"
+  ansible.builtin.command: uname -r
+  register: pre_patch_kernel
+  changed_when: false
+
+- name: "[PRE] Capture installed kernel list"
+  ansible.builtin.shell: rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | sort
+  register: pre_patch_kernels
+  changed_when: false
+
+- name: "[PRE] Capture last DNF transaction ID"
+  ansible.builtin.shell: dnf history list --reverse | tail -1 | awk '{print $1}'
+  register: pre_patch_dnf_txid
+  changed_when: false
+
+- name: "[PRE] Store pre-patch facts for report"
+  ansible.builtin.set_fact:
+    patch_pre_facts:
+      disk_free_mb: "{{ root_free_mb.stdout }}"
+      load_avg: "{{ load_avg.stdout }}"
+      packages: "{{ pre_patch_packages.stdout_lines }}"
+      kernel: "{{ pre_patch_kernel.stdout }}"
+      kernels: "{{ pre_patch_kernels.stdout_lines }}"
+      dnf_txid: "{{ pre_patch_dnf_txid.stdout | trim }}"
+      timestamp: "{{ ansible_date_time.iso8601 }}"
+      subscription_status: "{{ subman_status.stdout | default('skipped') }}"

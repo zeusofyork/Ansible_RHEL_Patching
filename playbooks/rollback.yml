@@ -1,0 +1,33 @@
+---
+# playbooks/rollback.yml
+# Manually trigger a DNF history rollback
+#
+# Usage:
+#   ansible-playbook playbooks/rollback.yml -i inventory/hosts --limit server01.example.com
+#   ansible-playbook playbooks/rollback.yml -i inventory/hosts -e "patch_rollback_transaction_count=2"
+
+- name: RHEL 9 Patch Rollback
+  hosts: "{{ patch_target | default('all') }}"
+  gather_facts: true
+  serial: 1  # rollback one host at a time — safety first
+
+  pre_tasks:
+    - name: Confirm rollback is intentional (safety gate)
+      ansible.builtin.pause:
+        prompt: |
+          ⚠️  You are about to roll back {{ patch_rollback_transaction_count | default(1) }}
+          DNF transaction(s) on: {{ inventory_hostname }}
+          Press ENTER to continue or Ctrl+C to abort.
+      when: patch_rollback_confirm | default(true) | bool
+
+  roles:
+    - role: rollback
+      tags: [rollback]
+
+  post_tasks:
+    - name: Reboot after rollback if policy allows
+      ansible.builtin.reboot:
+        reboot_timeout: "{{ patch_reboot_timeout }}"
+        test_command: "{{ patch_reboot_test_command }}"
+        msg: "Rebooting after patch rollback"
+      when: patch_reboot_policy != "never"

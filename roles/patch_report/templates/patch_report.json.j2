@@ -1,0 +1,41 @@
+{
+  "report": {
+    "hostname": "{{ inventory_hostname }}",
+    "fqdn": "{{ ansible_fqdn }}",
+    "ip_address": "{{ ansible_default_ipv4.address | default('unknown') }}",
+    "os": "{{ ansible_distribution }} {{ ansible_distribution_version }}",
+    "patch_window": "{{ patch_window }}",
+    "generated_at": "{{ ansible_date_time.iso8601 }}",
+    "status": "{{ 'failed' if patch_post_check_failed | default(false) else 'success' }}"
+  },
+  "pre_patch": {
+    "timestamp": "{{ patch_pre_facts.timestamp | default('') }}",
+    "kernel": "{{ patch_pre_facts.kernel | default('') }}",
+    "disk_free_mb": {{ patch_pre_facts.disk_free_mb | default(0) | int }},
+    "load_avg": "{{ patch_pre_facts.load_avg | default('') }}",
+    "dnf_transaction_id": "{{ patch_pre_facts.dnf_txid | default('') }}",
+    "subscription_status": "{{ patch_pre_facts.subscription_status | default('') }}",
+    "package_count": {{ patch_pre_facts.packages | default([]) | length }}
+  },
+  "post_patch": {
+    "timestamp": "{{ patch_post_facts.timestamp | default('') }}",
+    "kernel": "{{ patch_post_facts.kernel | default('') }}",
+    "kernel_changed": {{ patch_post_facts.kernel_changed | default(false) | lower }},
+    "dnf_transaction_id": "{{ patch_post_facts.dnf_txid | default('') }}",
+    "reboot_required": {{ patch_post_facts.reboot_required | default(false) | lower }},
+    "services_ok": {{ patch_post_facts.services_ok | default(true) | lower }},
+    "package_count": {{ patch_post_facts.packages | default([]) | length }},
+    "packages_updated_count": {{ patch_post_facts.packages_added | default([]) | length }},
+    "packages_removed_count": {{ patch_post_facts.packages_removed | default([]) | length }}
+  },
+  "packages_updated": [
+{% for pkg in patch_post_facts.packages_added | default([]) %}
+    "{{ pkg }}"{{ "," if not loop.last else "" }}
+{% endfor %}
+  ],
+  "packages_removed": [
+{% for pkg in patch_post_facts.packages_removed | default([]) %}
+    "{{ pkg }}"{{ "," if not loop.last else "" }}
+{% endfor %}
+  ]
+}

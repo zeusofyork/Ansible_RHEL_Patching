@@ -1,0 +1,30 @@
+---
+# roles/rhel_patch/tasks/subscription_manager.yml
+
+- name: Refresh subscription data
+  ansible.builtin.command: subscription-manager refresh
+  register: subman_refresh
+  changed_when: "'successfully' in subman_refresh.stdout | lower"
+  failed_when: subman_refresh.rc != 0
+
+- name: Auto-attach subscriptions if enabled
+  ansible.builtin.command: subscription-manager attach --auto
+  register: subman_attach
+  changed_when: "'subscribed' in subman_attach.stdout | lower"
+  failed_when: subman_attach.rc != 0
+  when: patch_subman_auto_attach | bool
+
+- name: Lock to specific minor release
+  ansible.builtin.command: "subscription-manager release --set={{ patch_subman_release_lock }}"
+  register: subman_release
+  changed_when: true
+  when: patch_subman_release_lock | length > 0
+
+- name: Clean DNF metadata cache
+  ansible.builtin.command: dnf clean all
+  changed_when: true
+
+- name: Rebuild DNF cache
+  ansible.builtin.command: dnf makecache
+  register: dnf_makecache
+  changed_when: "'Metadata cache created' in dnf_makecache.stdout"

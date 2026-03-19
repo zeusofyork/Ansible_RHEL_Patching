@@ -1,0 +1,24 @@
+---
+# inventory/group_vars/rhel9.yml
+# RHEL 9 specific overrides
+
+patch_os_family: "RedHat"
+patch_os_major: 9
+
+# RHEL 9 ships with dnf5 on some versions — use dnf module
+patch_pkg_manager: dnf
+
+# RHEL 9 uses unified kernel naming — safe to patch kernel by default
+# Override patch_exclude_packages in all.yml to include/exclude as needed
+
+# Default required repos for RHEL 9 (adjust for Satellite if applicable)
+patch_required_repos:
+  - rhel-9-for-x86_64-baseos-rpms
+  - rhel-9-for-x86_64-appstream-rpms
+
+# Post-patch services to validate on RHEL 9
+patch_check_services:
+  - sshd
+  - firewalld
+  - auditd
+  - chronyd
