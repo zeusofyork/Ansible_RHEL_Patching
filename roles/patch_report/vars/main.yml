@@ -1,4 +1,0 @@
----
-# roles/patch_report/vars/main.yml
-
-patch_report_mode: post_patch  # post_patch | availability

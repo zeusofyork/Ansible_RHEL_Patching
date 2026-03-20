@@ -1,0 +1,27 @@
+# Ansible
+*.retry
+ansible.log
+.fact_cache/
+reports/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Secrets — never commit vaults or key files
+*vault*.yml
+*.pem
+*.key
+.env
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp

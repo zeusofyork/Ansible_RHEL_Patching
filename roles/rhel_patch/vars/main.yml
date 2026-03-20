@@ -1,7 +1,0 @@
----
-# roles/rhel_patch/vars/main.yml
-
-patch_dnf_result:
-  changed: false
-  packages: []
-  msg: "Not yet run"

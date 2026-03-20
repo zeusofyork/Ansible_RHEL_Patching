@@ -1,5 +1,0 @@
----
-# roles/patch_validation/vars/main.yml
-# Internal defaults — override via inventory group_vars/host_vars
-
-patch_validation_phase: pre  # pre | post — set by calling playbook/task
