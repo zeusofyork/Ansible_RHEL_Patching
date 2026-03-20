@@ -1,0 +1,3 @@
+{
+  "query": "query { issues(first: 50) { nodes { id title severity remediation { description } entity { ... on CloudInstance { publicIp privateIp } } } } }"
+}

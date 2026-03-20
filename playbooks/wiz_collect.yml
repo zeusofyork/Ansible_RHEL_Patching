@@ -1,0 +1,7 @@
+---
+- name: Collect Wiz findings
+  hosts: localhost
+  gather_facts: false
+  roles:
+    - wiz_collect
+    - wiz_inventory

@@ -1,0 +1,11 @@
+- name: Skip hosts not matching environment
+  meta: end_host
+  when:
+    - target_env != "all"
+    - env_type != target_env
+
+- name: Block non-critical changes in prod
+  meta: end_host
+  when:
+    - env_type == "prod"
+    - severity != "CRITICAL"

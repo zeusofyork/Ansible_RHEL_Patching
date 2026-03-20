@@ -1,0 +1,10 @@
+---
+- name: Filter + approval + remediate
+  hosts: wiz_targets
+  gather_facts: false
+
+  roles:
+    - wiz_filter
+    - wiz_report
+    - wiz_servicenow
+    - wiz_remediation

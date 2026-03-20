@@ -1,0 +1,26 @@
+- name: Get Wiz token
+  uri:
+    url: "https://auth.wiz.io/oauth/token"
+    method: POST
+    body_format: json
+    body:
+      client_id: "{{ lookup('env','WIZ_CLIENT_ID') }}"
+      client_secret: "{{ lookup('env','WIZ_CLIENT_SECRET') }}"
+      audience: "wiz-api"
+      grant_type: "client_credentials"
+  register: wiz_auth
+
+- name: Query Wiz issues
+  uri:
+    url: "https://api.wiz.io/graphql"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ wiz_auth.json.access_token }}"
+      Content-Type: "application/json"
+    body: "{{ lookup('template', 'query.json.j2') }}"
+    body_format: json
+  register: wiz_data
+
+- name: Set findings
+  set_fact:
+    findings: "{{ wiz_data.json.data.issues.nodes }}"

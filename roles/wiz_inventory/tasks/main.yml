@@ -1,0 +1,14 @@
+- include_vars: "../../vars/host_env_map.yml"
+
+- name: Add hosts dynamically
+  add_host:
+    name: "{{ ip }}"
+    groups: wiz_targets
+    env_type: "{{ host_env_map[ip] | default('unknown') }}"
+    severity: "{{ item.severity }}"
+    vuln_title: "{{ item.title }}"
+    remediation_text: "{{ item.remediation.description | default('') }}"
+  vars:
+    ip: "{{ item.entity.publicIp | default(item.entity.privateIp) }}"
+  loop: "{{ findings }}"
+  when: item.entity is defined

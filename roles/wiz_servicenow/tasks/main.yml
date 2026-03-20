@@ -1,0 +1,32 @@
+- name: Skip ServiceNow approval if not prod
+  meta: end_host
+  when: env_type != "prod"
+
+- name: Create ServiceNow Change Request
+  uri:
+    url: "https://{{ snow_instance }}/api/now/table/change_request"
+    method: POST
+    user: "{{ snow_user }}"
+    password: "{{ snow_pass }}"
+    force_basic_auth: true
+    headers:
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      short_description: "Wiz Remediation - {{ vuln_title }}"
+      description: "Host: {{ inventory_hostname }} | Vulnerability: {{ vuln_title }}"
+      category: "Security"
+      type: "standard"
+  register: snow_change
+
+- name: Wait for approval
+  uri:
+    url: "https://{{ snow_instance }}/api/now/table/change_request/{{ snow_change.json.result.sys_id }}"
+    method: GET
+    user: "{{ snow_user }}"
+    password: "{{ snow_pass }}"
+    force_basic_auth: true
+  register: change_status
+  until: change_status.json.result.state == "3"
+  retries: 20
+  delay: 30

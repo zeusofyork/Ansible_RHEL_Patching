@@ -1,0 +1,13 @@
+- name: Show planned remediation
+  debug:
+    msg: |
+      =====================================
+      WIZ REMEDIATION REPORT
+      =====================================
+      Host: {{ inventory_hostname }}
+      Env: {{ env_type }}
+      Severity: {{ severity }}
+      Vulnerability: {{ vuln_title }}
+      Remediation: {{ remediation_text }}
+      Dry Run: {{ dry_run }}
+      =====================================

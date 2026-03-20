@@ -1,0 +1,21 @@
+- include_vars: "../../vars/remediation_map.yml"
+
+- name: Determine command
+  set_fact:
+    remediation_cmd: >-
+      {{ remediation_map[vuln_title].command
+         if vuln_title in remediation_map
+         else "echo 'No mapped remediation'" }}
+
+- name: Skip execution if dry run
+  meta: end_host
+  when: dry_run | bool
+
+- name: Execute remediation
+  shell: "{{ remediation_cmd }}"
+  become: true
+  register: result
+  ignore_errors: true
+
+- debug:
+    var: result.stdout
