@@ -2,15 +2,17 @@
 # =============================================================================
 # Wiz -> RHEL remediation (single-file playbook, AAP 2.6)
 #
-# Two plays:
-#   1. Collect  (localhost)    - pull Wiz findings, build dynamic inventory
-#   2. Remediate (wiz_targets) - filter, report, ServiceNow approval, remediate
+# Three plays:
+#   1. Pre-update (all)        - optional OS package update+upgrade (survey-gated)
+#   2. Collect  (localhost)    - pull Wiz findings, build dynamic inventory
+#   3. Remediate (wiz_targets) - filter, report, ServiceNow approval, remediate
 #
 # Expected credentials (environment variables on the execution environment):
 #   WIZ_CLIENT_ID, WIZ_CLIENT_SECRET
 #
 # Expected variables (AAP survey / extra-vars). Defaults below keep the
 # playbook runnable; override them from the controller as needed:
+#   run_system_update - true | false  run OS update+upgrade first (default: false)
 #   target_env     - "all" | "prod" | "test" ...   (default: all)
 #   dry_run        - true | false                  (default: true)
 #   snow_instance  - ServiceNow instance host      (prod approvals only)
@@ -18,9 +20,54 @@
 #   snow_pass      - ServiceNow password           (prod approvals only)
 #   remediation_map- map of vuln title -> { command }
 #
+# AAP survey question (add to the job template) for the pre-update:
+#   Variable: run_system_update   Type: Multiple Choice (single)
+#   Prompt:   "Run an OS package update + upgrade before querying Wiz?"
+#   Choices:  true / false        Default: false
+# The pre-update targets every host in the inventory; use the job template's
+# Limit field to narrow it to specific hosts.
+#
 # Environment (prod/test) is derived from the Wiz instance name: if the
 # name contains "prod" -> prod, "test" -> test, otherwise "unknown".
 # =============================================================================
+
+- name: Pre-Wiz OS package update
+  hosts: all
+  gather_facts: true
+  become: true
+
+  vars:
+    # Overridable from AAP survey / extra-vars. When false, every task below
+    # is skipped and this play is a no-op.
+    run_system_update: false
+
+  tasks:
+    - name: Update + upgrade all packages (apt)
+      apt:
+        update_cache: true
+        upgrade: dist
+      when:
+        - run_system_update | bool
+        - ansible_pkg_mgr == "apt"
+
+    - name: Update + upgrade all packages (dnf)
+      dnf:
+        name: "*"
+        state: latest
+        update_cache: true
+      when:
+        - run_system_update | bool
+        - ansible_pkg_mgr in ["dnf", "dnf5"]
+
+    - name: Update + upgrade all packages (yum)
+      yum:
+        name: "*"
+        state: latest
+        update_cache: true
+      when:
+        - run_system_update | bool
+        - ansible_pkg_mgr == "yum"
+
 
 - name: Collect Wiz findings
   hosts: localhost
