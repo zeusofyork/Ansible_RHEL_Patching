@@ -16,8 +16,10 @@
 #   snow_instance  - ServiceNow instance host      (prod approvals only)
 #   snow_user      - ServiceNow user               (prod approvals only)
 #   snow_pass      - ServiceNow password           (prod approvals only)
-#   host_env_map   - map of IP -> environment
 #   remediation_map- map of vuln title -> { command }
+#
+# Environment (prod/test) is derived from the Wiz instance name: if the
+# name contains "prod" -> prod, "test" -> test, otherwise "unknown".
 # =============================================================================
 
 - name: Collect Wiz findings
@@ -49,7 +51,7 @@
           query: >-
             query { issues(first: 50) { nodes { id title severity
             remediation { description }
-            entity { ... on CloudInstance { publicIp privateIp } } } } }
+            entity { ... on CloudInstance { name publicIp privateIp } } } } }
       register: wiz_data
 
     - name: Set findings
@@ -60,12 +62,17 @@
       add_host:
         name: "{{ ip }}"
         groups: wiz_targets
-        env_type: "{{ host_env_map[ip] | default('unknown') }}"
+        host_name: "{{ host_name }}"
+        env_type: >-
+          {{ 'prod' if 'prod' in host_name | lower
+             else 'test' if 'test' in host_name | lower
+             else 'unknown' }}
         severity: "{{ item.severity }}"
         vuln_title: "{{ item.title }}"
         remediation_text: "{{ item.remediation.description | default('') }}"
       vars:
         ip: "{{ item.entity.publicIp | default(item.entity.privateIp) }}"
+        host_name: "{{ item.entity.name | default('') }}"
       loop: "{{ findings }}"
       when: item.entity is defined
 
@@ -78,10 +85,6 @@
     # ---- Overridable from AAP survey / extra-vars -------------------------
     target_env: "all"
     dry_run: true
-
-    host_env_map:
-      "10.0.0.10": "prod"
-      "10.0.0.11": "test"
 
     remediation_map:
       "OpenSSH Vulnerability":
@@ -110,6 +113,7 @@
           WIZ REMEDIATION REPORT
           =====================================
           Host: {{ inventory_hostname }}
+          Name: {{ host_name }}
           Env: {{ env_type }}
           Severity: {{ severity }}
           Vulnerability: {{ vuln_title }}
