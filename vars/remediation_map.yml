@@ -1,3 +1,0 @@
-remediation_map:
-  "OpenSSH Vulnerability":
-    command: "yum update openssh -y"

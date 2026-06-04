@@ -1,0 +1,174 @@
+---
+# =============================================================================
+# Wiz -> RHEL remediation (single-file playbook, AAP 2.6)
+#
+# Two plays:
+#   1. Collect  (localhost)    - pull Wiz findings, build dynamic inventory
+#   2. Remediate (wiz_targets) - filter, report, ServiceNow approval, remediate
+#
+# Expected credentials (environment variables on the execution environment):
+#   WIZ_CLIENT_ID, WIZ_CLIENT_SECRET
+#
+# Expected variables (AAP survey / extra-vars). Defaults below keep the
+# playbook runnable; override them from the controller as needed:
+#   target_env     - "all" | "prod" | "test" ...   (default: all)
+#   dry_run        - true | false                  (default: true)
+#   snow_instance  - ServiceNow instance host      (prod approvals only)
+#   snow_user      - ServiceNow user               (prod approvals only)
+#   snow_pass      - ServiceNow password           (prod approvals only)
+#   host_env_map   - map of IP -> environment
+#   remediation_map- map of vuln title -> { command }
+# =============================================================================
+
+- name: Collect Wiz findings
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Get Wiz token
+      uri:
+        url: "https://auth.wiz.io/oauth/token"
+        method: POST
+        body_format: json
+        body:
+          client_id: "{{ lookup('env', 'WIZ_CLIENT_ID') }}"
+          client_secret: "{{ lookup('env', 'WIZ_CLIENT_SECRET') }}"
+          audience: "wiz-api"
+          grant_type: "client_credentials"
+      register: wiz_auth
+
+    - name: Query Wiz issues
+      uri:
+        url: "https://api.wiz.io/graphql"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ wiz_auth.json.access_token }}"
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          query: >-
+            query { issues(first: 50) { nodes { id title severity
+            remediation { description }
+            entity { ... on CloudInstance { publicIp privateIp } } } } }
+      register: wiz_data
+
+    - name: Set findings
+      set_fact:
+        findings: "{{ wiz_data.json.data.issues.nodes }}"
+
+    - name: Add hosts dynamically
+      add_host:
+        name: "{{ ip }}"
+        groups: wiz_targets
+        env_type: "{{ host_env_map[ip] | default('unknown') }}"
+        severity: "{{ item.severity }}"
+        vuln_title: "{{ item.title }}"
+        remediation_text: "{{ item.remediation.description | default('') }}"
+      vars:
+        ip: "{{ item.entity.publicIp | default(item.entity.privateIp) }}"
+      loop: "{{ findings }}"
+      when: item.entity is defined
+
+
+- name: Filter + approval + remediate
+  hosts: wiz_targets
+  gather_facts: false
+
+  vars:
+    # ---- Overridable from AAP survey / extra-vars -------------------------
+    target_env: "all"
+    dry_run: true
+
+    host_env_map:
+      "10.0.0.10": "prod"
+      "10.0.0.11": "test"
+
+    remediation_map:
+      "OpenSSH Vulnerability":
+        command: "yum update openssh -y"
+    # ----------------------------------------------------------------------
+
+  tasks:
+    # ---- Filter ----------------------------------------------------------
+    - name: Skip hosts not matching environment
+      meta: end_host
+      when:
+        - target_env != "all"
+        - env_type != target_env
+
+    - name: Block non-critical changes in prod
+      meta: end_host
+      when:
+        - env_type == "prod"
+        - severity != "CRITICAL"
+
+    # ---- Report ----------------------------------------------------------
+    - name: Show planned remediation
+      debug:
+        msg: |
+          =====================================
+          WIZ REMEDIATION REPORT
+          =====================================
+          Host: {{ inventory_hostname }}
+          Env: {{ env_type }}
+          Severity: {{ severity }}
+          Vulnerability: {{ vuln_title }}
+          Remediation: {{ remediation_text }}
+          Dry Run: {{ dry_run }}
+          =====================================
+
+    # ---- ServiceNow approval (prod only) ---------------------------------
+    - name: Skip ServiceNow approval if not prod
+      meta: end_host
+      when: env_type != "prod"
+
+    - name: Create ServiceNow Change Request
+      uri:
+        url: "https://{{ snow_instance }}/api/now/table/change_request"
+        method: POST
+        user: "{{ snow_user }}"
+        password: "{{ snow_pass }}"
+        force_basic_auth: true
+        headers:
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          short_description: "Wiz Remediation - {{ vuln_title }}"
+          description: "Host: {{ inventory_hostname }} | Vulnerability: {{ vuln_title }}"
+          category: "Security"
+          type: "standard"
+      register: snow_change
+
+    - name: Wait for approval
+      uri:
+        url: "https://{{ snow_instance }}/api/now/table/change_request/{{ snow_change.json.result.sys_id }}"
+        method: GET
+        user: "{{ snow_user }}"
+        password: "{{ snow_pass }}"
+        force_basic_auth: true
+      register: change_status
+      until: change_status.json.result.state == "3"
+      retries: 20
+      delay: 30
+
+    # ---- Remediation -----------------------------------------------------
+    - name: Determine command
+      set_fact:
+        remediation_cmd: >-
+          {{ remediation_map[vuln_title].command
+             if vuln_title in remediation_map
+             else "echo 'No mapped remediation'" }}
+
+    - name: Skip execution if dry run
+      meta: end_host
+      when: dry_run | bool
+
+    - name: Execute remediation
+      shell: "{{ remediation_cmd }}"
+      become: true
+      register: result
+      ignore_errors: true
+
+    - name: Show remediation output
+      debug:
+        var: result.stdout

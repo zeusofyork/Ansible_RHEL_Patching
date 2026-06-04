@@ -1,3 +1,0 @@
----
-- import_playbook: wiz_collect.yml
-- import_playbook: wiz_remediate.yml
