@@ -1,21 +1,21 @@
 {
-  "name": "Pre-Wiz OS Update Survey",
-  "description": "Survey for the pre-update play in site.yml (refresh repos + upgrade packages before the Wiz query)",
+  "name": "OS Patching Survey",
+  "description": "Survey for patch.yml — refresh repos + upgrade packages (apt/dnf/yum)",
   "spec": [
     {
-      "question_name": "Run OS package update first",
-      "question_description": "Run an OS package update + upgrade before querying Wiz? When false the pre-update play is a no-op.",
-      "variable": "run_system_update",
+      "question_name": "Target environment",
+      "question_description": "Environment label / safety gate. A live prod run prints a prominent warning. Make sure the Job Template inventory/limit matches this selection.",
+      "variable": "target_env",
       "type": "multiplechoice",
-      "choices": ["false", "true"],
-      "default": "false",
+      "choices": ["non-prod", "prod"],
+      "default": "non-prod",
       "required": true,
       "min": null,
       "max": null
     },
     {
       "question_name": "Dry run",
-      "question_description": "When true the update only reports what would change (check_mode) and never reboots. Also gates the Wiz remediation play.",
+      "question_description": "When true the update only reports what would change (check_mode) and never reboots.",
       "variable": "dry_run",
       "type": "multiplechoice",
       "choices": ["true", "false"],
@@ -26,7 +26,7 @@
     },
     {
       "question_name": "Skip packages / applications",
-      "question_description": "Space- or comma-separated package names to exclude from the upgrade (e.g. 'kernel docker-ce nginx'). Leave blank to upgrade everything.",
+      "question_description": "Space- or comma-separated package names to exclude from the upgrade (e.g. 'kernel docker-ce nginx'). Leave BLANK to fall back to each host's inventory value (skip_packages_default).",
       "variable": "skip_packages",
       "type": "text",
       "default": "",

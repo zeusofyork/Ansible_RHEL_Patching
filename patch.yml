@@ -8,17 +8,27 @@
 # and no reboot.
 #
 # Expected variables (AAP survey / extra-vars):
+#   target_env         - prod | non-prod  environment label / safety gate; a live
+#                                       prod run prints a prominent warning
+#                                       (default: non-prod)
 #   dry_run            - true | false   when true only reports what would change
 #                                       (check_mode) and never reboots (default: true)
 #   skip_packages      - free text      space/comma separated packages to exclude
-#                                       from the upgrade (default: "" = none)
+#                                       from the upgrade. Leave BLANK to fall back
+#                                       to the per-host inventory value below
+#                                       (default: "")
 #   reboot_if_required - yes | no       reboot after upgrade only when the OS
 #                                       reports one is needed and not dry_run
 #                                       (default: no)
 #
+# Per-host inventory variable (host_vars / group_vars), used only when the
+# survey skip_packages field is left blank:
+#   skip_packages_default - free text   packages to exclude for that host/group
+#
 # An importable survey lives in aap/patch_survey_spec.json (see aap/README.md).
 # The play targets every host in the inventory; use the Job Template Limit
-# field to narrow it to specific hosts.
+# field to narrow it to specific hosts (enable Prompt on Launch to choose at
+# launch time).
 # =============================================================================
 
 - name: OS package update
@@ -27,26 +37,47 @@
   become: true
 
   vars:
-    # Overridable from AAP survey / extra-vars.
+    # Overridable from AAP survey / extra-vars. Note: skip_packages_default is
+    # intentionally NOT defined here so an inventory value is not shadowed.
+    target_env: "non-prod"
     dry_run: true
     skip_packages: ""
     reboot_if_required: "no"
 
   tasks:
-    - name: Normalise inputs
+    - name: Resolve inputs (survey overrides inventory; blank falls back)
       set_fact:
         update_dry_run: "{{ dry_run | bool }}"
         do_reboot: "{{ reboot_if_required | lower in ['yes', 'true', 'y'] }}"
-        skip_list: "{{ (skip_packages | default('') | replace(',', ' ')).split() }}"
+        effective_skip: >-
+          {{ skip_packages
+             if (skip_packages | default('') | trim | length > 0)
+             else (skip_packages_default | default('')) }}
+
+    - name: Build skip list
+      set_fact:
+        skip_list: "{{ (effective_skip | replace(',', ' ')).split() }}"
+        skip_source: >-
+          {{ 'survey' if (skip_packages | default('') | trim | length > 0)
+             else ('inventory' if (skip_packages_default | default('') | trim | length > 0)
+                   else 'none') }}
 
     - name: Show OS update plan
       debug:
         msg:
           - "Host: {{ inventory_hostname }} ({{ ansible_distribution }} {{ ansible_distribution_version }})"
+          - "Environment: {{ target_env }}"
           - "Package manager: {{ ansible_pkg_mgr }}"
           - "Mode: {{ 'DRY RUN (no changes)' if update_dry_run else 'LIVE (changes applied)' }}"
-          - "Excluded packages: {{ skip_list | join(', ') if skip_list | length > 0 else 'none' }}"
+          - "Excluded packages: {{ skip_list | join(', ') if skip_list | length > 0 else 'none' }} (source: {{ skip_source }})"
           - "Reboot if required: {{ do_reboot }}"
+
+    - name: Warn on live production run
+      debug:
+        msg: "PRODUCTION LIVE RUN — packages will be upgraded on {{ inventory_hostname }}."
+      when:
+        - target_env | lower == "prod"
+        - not update_dry_run | bool
 
     # ---- apt (Debian/Ubuntu): hold excluded pkgs, upgrade, release ---------
     - name: Hold skipped packages (apt)
