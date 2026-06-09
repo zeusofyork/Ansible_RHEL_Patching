@@ -1,0 +1,49 @@
+{
+  "name": "Pre-Wiz OS Update Survey",
+  "description": "Survey for the pre-update play in site.yml (refresh repos + upgrade packages before the Wiz query)",
+  "spec": [
+    {
+      "question_name": "Run OS package update first",
+      "question_description": "Run an OS package update + upgrade before querying Wiz? When false the pre-update play is a no-op.",
+      "variable": "run_system_update",
+      "type": "multiplechoice",
+      "choices": ["false", "true"],
+      "default": "false",
+      "required": true,
+      "min": null,
+      "max": null
+    },
+    {
+      "question_name": "Dry run",
+      "question_description": "When true the update only reports what would change (check_mode) and never reboots. Also gates the Wiz remediation play.",
+      "variable": "dry_run",
+      "type": "multiplechoice",
+      "choices": ["true", "false"],
+      "default": "true",
+      "required": true,
+      "min": null,
+      "max": null
+    },
+    {
+      "question_name": "Skip packages / applications",
+      "question_description": "Space- or comma-separated package names to exclude from the upgrade (e.g. 'kernel docker-ce nginx'). Leave blank to upgrade everything.",
+      "variable": "skip_packages",
+      "type": "text",
+      "default": "",
+      "required": false,
+      "min": 0,
+      "max": 1024
+    },
+    {
+      "question_name": "Reboot if required",
+      "question_description": "Reboot the host after upgrade only when the OS reports a reboot is required. Ignored during a dry run.",
+      "variable": "reboot_if_required",
+      "type": "multiplechoice",
+      "choices": ["no", "yes"],
+      "default": "no",
+      "required": true,
+      "min": null,
+      "max": null
+    }
+  ]
+}

@@ -12,18 +12,23 @@
 #
 # Expected variables (AAP survey / extra-vars). Defaults below keep the
 # playbook runnable; override them from the controller as needed:
-#   run_system_update - true | false  run OS update+upgrade first (default: false)
+#   run_system_update  - true | false  run OS update+upgrade first (default: false)
+#   dry_run            - true | false   when true the pre-update only reports what
+#                                       would change (check_mode); also gates the
+#                                       Wiz remediation play (default: true)
+#   skip_packages      - free text      space/comma separated packages to exclude
+#                                       from the OS upgrade (default: "" = none)
+#   reboot_if_required - yes | no       reboot after upgrade only when the OS
+#                                       reports one is needed and not dry_run
+#                                       (default: no)
 #   target_env     - "all" | "prod" | "test" ...   (default: all)
-#   dry_run        - true | false                  (default: true)
 #   snow_instance  - ServiceNow instance host      (prod approvals only)
 #   snow_user      - ServiceNow user               (prod approvals only)
 #   snow_pass      - ServiceNow password           (prod approvals only)
 #   remediation_map- map of vuln title -> { command }
 #
-# AAP survey question (add to the job template) for the pre-update:
-#   Variable: run_system_update   Type: Multiple Choice (single)
-#   Prompt:   "Run an OS package update + upgrade before querying Wiz?"
-#   Choices:  true / false        Default: false
+# An importable survey covering the pre-update inputs lives in
+# aap/patch_survey_spec.json (see aap/README.md for wiring it up).
 # The pre-update targets every host in the inventory; use the job template's
 # Limit field to narrow it to specific hosts.
 #
@@ -37,36 +42,112 @@
   become: true
 
   vars:
-    # Overridable from AAP survey / extra-vars. When false, every task below
-    # is skipped and this play is a no-op.
+    # Overridable from AAP survey / extra-vars. When run_system_update is false,
+    # every task below is skipped and this play is a no-op.
     run_system_update: false
+    dry_run: true
+    skip_packages: ""
+    reboot_if_required: "no"
 
   tasks:
-    - name: Update + upgrade all packages (apt)
-      apt:
-        update_cache: true
-        upgrade: dist
+    - name: Normalise pre-update inputs
+      set_fact:
+        update_dry_run: "{{ dry_run | bool }}"
+        do_reboot: "{{ reboot_if_required | lower in ['yes', 'true', 'y'] }}"
+        skip_list: "{{ (skip_packages | default('') | replace(',', ' ')).split() }}"
+      when: run_system_update | bool
+
+    - name: Show OS update plan
+      debug:
+        msg:
+          - "Host: {{ inventory_hostname }} ({{ ansible_distribution }} {{ ansible_distribution_version }})"
+          - "Package manager: {{ ansible_pkg_mgr }}"
+          - "Mode: {{ 'DRY RUN (no changes)' if update_dry_run else 'LIVE (changes applied)' }}"
+          - "Excluded packages: {{ skip_list | join(', ') if skip_list | length > 0 else 'none' }}"
+          - "Reboot if required: {{ do_reboot }}"
+      when: run_system_update | bool
+
+    # ---- apt (Debian/Ubuntu): hold excluded pkgs, upgrade, release ---------
+    - name: Hold skipped packages (apt)
+      dpkg_selections:
+        name: "{{ item }}"
+        selection: hold
+      loop: "{{ skip_list }}"
+      check_mode: "{{ update_dry_run }}"
       when:
         - run_system_update | bool
         - ansible_pkg_mgr == "apt"
 
+    - name: Update + upgrade all packages (apt)
+      apt:
+        update_cache: true
+        upgrade: dist
+      check_mode: "{{ update_dry_run }}"
+      when:
+        - run_system_update | bool
+        - ansible_pkg_mgr == "apt"
+
+    - name: Release holds on skipped packages (apt)
+      dpkg_selections:
+        name: "{{ item }}"
+        selection: install
+      loop: "{{ skip_list }}"
+      check_mode: "{{ update_dry_run }}"
+      when:
+        - run_system_update | bool
+        - ansible_pkg_mgr == "apt"
+
+    # ---- dnf (RHEL 8+/Fedora): exclude excluded pkgs -----------------------
     - name: Update + upgrade all packages (dnf)
       dnf:
         name: "*"
         state: latest
         update_cache: true
+        exclude: "{{ skip_list }}"
+      check_mode: "{{ update_dry_run }}"
       when:
         - run_system_update | bool
         - ansible_pkg_mgr in ["dnf", "dnf5"]
 
+    # ---- yum (RHEL 7): exclude excluded pkgs -------------------------------
     - name: Update + upgrade all packages (yum)
       yum:
         name: "*"
         state: latest
         update_cache: true
+        exclude: "{{ skip_list | join(',') }}"
+      check_mode: "{{ update_dry_run }}"
       when:
         - run_system_update | bool
         - ansible_pkg_mgr == "yum"
+
+    # ---- Reboot (only when requested, live, and actually required) ---------
+    - name: Check whether a reboot is required (RedHat)
+      command: needs-restarting -r
+      register: rh_reboot_check
+      changed_when: false
+      failed_when: false
+      when:
+        - run_system_update | bool
+        - ansible_os_family == "RedHat"
+
+    - name: Check whether a reboot is required (Debian)
+      stat:
+        path: /var/run/reboot-required
+      register: deb_reboot_check
+      when:
+        - run_system_update | bool
+        - ansible_os_family == "Debian"
+
+    - name: Reboot if required and requested
+      reboot:
+        msg: "Rebooting after OS package update (AAP pre-update play)"
+        reboot_timeout: 600
+      when:
+        - run_system_update | bool
+        - do_reboot | default(false) | bool
+        - not update_dry_run | default(true) | bool
+        - (rh_reboot_check.rc | default(0)) == 1 or (deb_reboot_check.stat.exists | default(false))
 
 
 - name: Collect Wiz findings
