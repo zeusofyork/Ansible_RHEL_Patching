@@ -1,0 +1,116 @@
+---
+# =============================================================================
+# OS package update (single-file playbook, AAP 2.6)
+#
+# Refresh the OS package repositories (apt / dnf / yum), upgrade installed
+# packages, and optionally reboot. Driven by an AAP Job Template survey whose
+# answers arrive as extra-vars. Defaults keep it safe: a dry run with no skips
+# and no reboot.
+#
+# Expected variables (AAP survey / extra-vars):
+#   dry_run            - true | false   when true only reports what would change
+#                                       (check_mode) and never reboots (default: true)
+#   skip_packages      - free text      space/comma separated packages to exclude
+#                                       from the upgrade (default: "" = none)
+#   reboot_if_required - yes | no       reboot after upgrade only when the OS
+#                                       reports one is needed and not dry_run
+#                                       (default: no)
+#
+# An importable survey lives in aap/patch_survey_spec.json (see aap/README.md).
+# The play targets every host in the inventory; use the Job Template Limit
+# field to narrow it to specific hosts.
+# =============================================================================
+
+- name: OS package update
+  hosts: all
+  gather_facts: true
+  become: true
+
+  vars:
+    # Overridable from AAP survey / extra-vars.
+    dry_run: true
+    skip_packages: ""
+    reboot_if_required: "no"
+
+  tasks:
+    - name: Normalise inputs
+      set_fact:
+        update_dry_run: "{{ dry_run | bool }}"
+        do_reboot: "{{ reboot_if_required | lower in ['yes', 'true', 'y'] }}"
+        skip_list: "{{ (skip_packages | default('') | replace(',', ' ')).split() }}"
+
+    - name: Show OS update plan
+      debug:
+        msg:
+          - "Host: {{ inventory_hostname }} ({{ ansible_distribution }} {{ ansible_distribution_version }})"
+          - "Package manager: {{ ansible_pkg_mgr }}"
+          - "Mode: {{ 'DRY RUN (no changes)' if update_dry_run else 'LIVE (changes applied)' }}"
+          - "Excluded packages: {{ skip_list | join(', ') if skip_list | length > 0 else 'none' }}"
+          - "Reboot if required: {{ do_reboot }}"
+
+    # ---- apt (Debian/Ubuntu): hold excluded pkgs, upgrade, release ---------
+    - name: Hold skipped packages (apt)
+      dpkg_selections:
+        name: "{{ item }}"
+        selection: hold
+      loop: "{{ skip_list }}"
+      check_mode: "{{ update_dry_run }}"
+      when: ansible_pkg_mgr == "apt"
+
+    - name: Update + upgrade all packages (apt)
+      apt:
+        update_cache: true
+        upgrade: dist
+      check_mode: "{{ update_dry_run }}"
+      when: ansible_pkg_mgr == "apt"
+
+    - name: Release holds on skipped packages (apt)
+      dpkg_selections:
+        name: "{{ item }}"
+        selection: install
+      loop: "{{ skip_list }}"
+      check_mode: "{{ update_dry_run }}"
+      when: ansible_pkg_mgr == "apt"
+
+    # ---- dnf (RHEL 8+/Fedora): exclude excluded pkgs -----------------------
+    - name: Update + upgrade all packages (dnf)
+      dnf:
+        name: "*"
+        state: latest
+        update_cache: true
+        exclude: "{{ skip_list }}"
+      check_mode: "{{ update_dry_run }}"
+      when: ansible_pkg_mgr in ["dnf", "dnf5"]
+
+    # ---- yum (RHEL 7): exclude excluded pkgs -------------------------------
+    - name: Update + upgrade all packages (yum)
+      yum:
+        name: "*"
+        state: latest
+        update_cache: true
+        exclude: "{{ skip_list | join(',') }}"
+      check_mode: "{{ update_dry_run }}"
+      when: ansible_pkg_mgr == "yum"
+
+    # ---- Reboot (only when requested, live, and actually required) ---------
+    - name: Check whether a reboot is required (RedHat)
+      command: needs-restarting -r
+      register: rh_reboot_check
+      changed_when: false
+      failed_when: false
+      when: ansible_os_family == "RedHat"
+
+    - name: Check whether a reboot is required (Debian)
+      stat:
+        path: /var/run/reboot-required
+      register: deb_reboot_check
+      when: ansible_os_family == "Debian"
+
+    - name: Reboot if required and requested
+      reboot:
+        msg: "Rebooting after OS package update (AAP patch play)"
+        reboot_timeout: 600
+      when:
+        - do_reboot | default(false) | bool
+        - not update_dry_run | default(true) | bool
+        - (rh_reboot_check.rc | default(0)) == 1 or (deb_reboot_check.stat.exists | default(false))
