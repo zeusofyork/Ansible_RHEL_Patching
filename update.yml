@@ -1,0 +1,191 @@
+---
+# =============================================================================
+# os_package_update.yml
+# -----------------------------------------------------------------------------
+# Cross-distro OS package update & upgrade for Ansible Automation Platform 2.6.
+#
+# - Targets `all` so AAP supplies hosts from whatever DYNAMIC INVENTORY source
+#   is attached to the Job Template (aws_ec2, azure_rm, vmware, constructed,
+#   ServiceNow, etc.). No static hosts are defined here on purpose.
+# - Detects the package manager via gathered facts (apt / dnf / yum) and applies
+#   the correct upgrade semantics for each family.
+# - Only uses ansible.builtin modules, so the default RHEL/community EE works
+#   with no extra collections.
+# - Patches in canary batches and reboots on a configurable policy.
+#
+# Override any var below via a Survey or extra_vars on the Job Template.
+# =============================================================================
+
+- name: Update and upgrade OS packages (apt / dnf / yum)
+  hosts: all
+  become: true
+  gather_facts: true
+
+  # ---- Rolling / canary rollout ------------------------------------------
+  # Patch 10% first (canary), then 25%, then the remainder. Protects fleet
+  # availability and contains a bad mirror/update before it hits everything.
+  serial:
+    - "10%"
+    - "25%"
+    - "100%"
+
+  # Abort the batch (and therefore the run) if more than this % of hosts in a
+  # batch fail. Set to 0 to halt on the first failure in any batch.
+  max_fail_percentage: 20
+
+  vars:
+    # Reboot behavior: "never" | "if-required" | "always"
+    reboot_policy: "if-required"
+    reboot_timeout: 900
+
+    # apt upgrade strategy: "safe" (apt upgrade) | "full"/"dist" (full-upgrade).
+    # "safe" never removes packages; "dist" can add/remove deps to satisfy
+    # held-back updates. Conservative default = safe.
+    apt_upgrade_type: "safe"
+    apt_cache_valid_time: 3600
+
+    # Remove orphaned dependencies after upgrading.
+    autoremove: true
+
+    # Install dnf-utils/yum-utils so `needs-restarting -r` reboot detection is
+    # reliable on RHEL-family hosts. Set false in locked-down environments.
+    manage_needs_restarting: true
+
+  pre_tasks:
+    - name: Fail fast on unsupported OS families
+      ansible.builtin.assert:
+        that:
+          - ansible_facts['os_family'] in ['Debian', 'RedHat']
+        fail_msg: >-
+          Unsupported OS family '{{ ansible_facts['os_family'] }}' on
+          {{ inventory_hostname }}. This playbook handles Debian and RedHat
+          families only.
+        success_msg: >-
+          {{ inventory_hostname }} ({{ ansible_facts['distribution'] }}
+          {{ ansible_facts['distribution_version'] }}) — pkg_mgr:
+          {{ ansible_facts['pkg_mgr'] }}
+
+  tasks:
+    # ------------------------------------------------------------------ Debian
+    - name: Debian / Ubuntu package maintenance
+      when: ansible_facts['os_family'] == 'Debian'
+      block:
+        - name: Update apt cache
+          ansible.builtin.apt:
+            update_cache: true
+            cache_valid_time: "{{ apt_cache_valid_time }}"
+          register: apt_cache
+          retries: 3
+          delay: 10
+          until: apt_cache is succeeded
+
+        - name: Apply package upgrades (apt)
+          ansible.builtin.apt:
+            upgrade: "{{ apt_upgrade_type }}"
+          register: apt_upgrade
+          retries: 2
+          delay: 15
+          until: apt_upgrade is succeeded
+
+        - name: Remove unused dependencies and clean cache (apt)
+          ansible.builtin.apt:
+            autoremove: true
+            autoclean: true
+          when: autoremove | bool
+
+        - name: Check for the reboot-required flag (Debian)
+          ansible.builtin.stat:
+            path: /var/run/reboot-required
+          register: debian_reboot_file
+
+    # ----------------------------------------------------------------- RedHat
+    - name: RHEL / Fedora / CentOS / Rocky / Alma package maintenance
+      when: ansible_facts['os_family'] == 'RedHat'
+      block:
+        - name: Ensure needs-restarting is available (dnf)
+          ansible.builtin.dnf:
+            name: dnf-utils
+            state: present
+          when:
+            - manage_needs_restarting | bool
+            - ansible_facts['pkg_mgr'] == 'dnf'
+
+        - name: Ensure needs-restarting is available (yum)
+          ansible.builtin.yum:
+            name: yum-utils
+            state: present
+          when:
+            - manage_needs_restarting | bool
+            - ansible_facts['pkg_mgr'] == 'yum'
+
+        - name: Apply package upgrades (dnf)
+          ansible.builtin.dnf:
+            name: "*"
+            state: latest
+            update_cache: true
+          register: dnf_upgrade
+          retries: 2
+          delay: 15
+          until: dnf_upgrade is succeeded
+          when: ansible_facts['pkg_mgr'] == 'dnf'
+
+        - name: Apply package upgrades (legacy yum)
+          ansible.builtin.yum:
+            name: "*"
+            state: latest
+            update_cache: true
+          register: yum_upgrade
+          retries: 2
+          delay: 15
+          until: yum_upgrade is succeeded
+          when: ansible_facts['pkg_mgr'] == 'yum'
+
+        - name: Remove unused dependencies (dnf)
+          ansible.builtin.dnf:
+            autoremove: true
+          when:
+            - autoremove | bool
+            - ansible_facts['pkg_mgr'] == 'dnf'
+
+        - name: Remove unused dependencies (yum)
+          ansible.builtin.yum:
+            autoremove: true
+          when:
+            - autoremove | bool
+            - ansible_facts['pkg_mgr'] == 'yum'
+
+        # needs-restarting -r: rc 1 = reboot required, rc 0 = not required.
+        - name: Check whether a reboot is required (RedHat)
+          ansible.builtin.command: needs-restarting -r
+          register: redhat_needs_restarting
+          changed_when: false
+          failed_when: false
+
+    # ----------------------------------------------------------------- Reboot
+    - name: Determine whether this host needs a reboot
+      ansible.builtin.set_fact:
+        os_reboot_required: >-
+          {{
+            reboot_policy == 'always'
+            or (
+              reboot_policy == 'if-required' and (
+                (debian_reboot_file.stat.exists | default(false))
+                or ((redhat_needs_restarting.rc | default(0)) == 1)
+              )
+            )
+          }}
+
+    - name: Reboot host to apply updates
+      ansible.builtin.reboot:
+        msg: "Reboot initiated by Ansible OS patching playbook"
+        reboot_timeout: "{{ reboot_timeout }}"
+        test_command: "whoami"
+      when: os_reboot_required | bool
+
+  post_tasks:
+    - name: Patching summary
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }} patched via {{ ansible_facts['pkg_mgr'] }};
+          reboot {{ 'performed' if (os_reboot_required | bool) else 'not needed'
+          }} (policy: {{ reboot_policy }}).
