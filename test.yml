@@ -1,0 +1,16 @@
+---
+- name: Test AAP Connectivity
+  hosts: all
+  gather_facts: false
+
+  tasks:
+    - name: Ping host
+      ansible.builtin.ping:
+
+    - name: Display hostname
+      ansible.builtin.command: hostname
+      register: hostname_output
+
+    - name: Show hostname
+      ansible.builtin.debug:
+        msg: "Connected to {{ hostname_output.stdout }}"
